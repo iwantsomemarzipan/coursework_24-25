@@ -1,0 +1,146 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+library(readxl)
+library(brms)
+library(tidyverse)
+
+options(mc.cores = 4)
+set.seed(1794)
+```
+
+```{r}
+exp3_Q1 <- read_excel("exp3_Q1.xlsx")
+exp3_Q2 <- read_excel("exp3_Q2.xlsx")
+
+convert_vars <- function(df, ordinal_var, factor_vars) {
+  df[[ordinal_var]] <- factor(df[[ordinal_var]], ordered = TRUE)
+  df <- df %>%
+    mutate(across(all_of(factor_vars), as.factor))
+  return(df)
+}
+
+exp3_Q1 <- convert_vars(
+  exp3_Q1, 
+  ordinal_var = "Rating", 
+  factor_vars = c("Mood", "Degmod")
+)
+
+exp3_Q2 <- convert_vars(
+  exp3_Q2, 
+  ordinal_var = "Rating", 
+  factor_vars = c("Mood", "Degmod")
+)
+```
+
+```{r}
+exp3_Q1$Mood_cont <- as.factor(exp3_Q1$Mood)
+exp3_Q1$Degmod_cont <- as.factor(exp3_Q1$Degmod)
+
+exp3_Q2$Mood_cont <- as.factor(exp3_Q2$Mood)
+exp3_Q2$Degmod_cont <- as.factor(exp3_Q2$Degmod)
+
+contrasts(exp3_Q1$Mood_cont) <- c(-.5,.5)
+contrasts(exp3_Q1$Degmod_cont) <- c(-.5,.5)
+contrasts(exp3_Q2$Mood_cont) <- c(-.5,.5)
+contrasts(exp3_Q2$Degmod_cont) <- c(-.5,.5)
+```
+
+```{r}
+formula <- Rating ~ Degmod_cont * Mood_cont +
+  (1 + Degmod_cont * Mood_cont | Model) +
+  (1 + Degmod_cont * Mood_cont | Item)
+```
+
+```{r}
+priors_Q1 <- c(
+  set_prior("normal(0, 1.5)", class = "b"),
+  set_prior("exponential(0.56)", class = "sd", group = "Model"),
+  set_prior("exponential(0.52)", class = "sd", group = "Item")
+)
+
+priors_Q2 <- c(
+  set_prior("normal(0, 1.35)", class = "b"),
+  set_prior("exponential(1.15)", class = "sd", group = "Model"),
+  set_prior("exponential(1.1)", class = "sd", group = "Item")
+)
+```
+
+```{r}
+model_Q1_rating <- brm(
+  formula = formula,
+  data = exp3_Q1,
+  family = cumulative("probit"),
+  chains = 4,
+  iter = 8000,
+  prior = priors_Q1,
+  seed = 1794,
+  control = list(adapt_delta = 0.99, max_treedepth = 12)
+)
+```
+
+```{r}
+model_Q1_rating
+```
+
+```{r}
+post_model_Q1 <- as_draws_df(model_Q1_rating, variable = NULL, regex = FALSE, inc_warmup = FALSE)
+
+mean(post_model_Q1$'b_Degmod_cont1' > 0)
+mean(post_model_Q1$'b_Mood_cont1' > 0)
+mean(post_model_Q1$'b_Degmod_cont1:Mood_cont1' < 0)
+```
+
+```{r}
+model_Q2_rating <- brm(
+  formula = formula,
+  data = exp3_Q2,
+  family = cumulative("probit"),
+  chains = 4,
+  iter = 8000,
+  prior = priors_Q2,
+  seed = 1794,
+  control = list(adapt_delta = 0.99, max_treedepth = 12)
+)
+```
+```{r}
+model_Q2_rating
+```
+
+```{r}
+post_model_Q2 <- as_draws_df(model_Q2_rating, variable = NULL, regex = FALSE, inc_warmup = FALSE)
+
+mean(post_model_Q2$'b_Degmod_cont1' < 0)
+mean(post_model_Q2$'b_Mood_cont1' > 0)
+mean(post_model_Q2$'b_Degmod_cont1:Mood_cont1' > 0)
+```
+```{r}
+conditions <- data.frame(Degmod_cont=c("none","very"))
+post_plot_1 <- conditional_effects(model_Q1_rating, effects = "Mood_cont",
+  conditions = conditions, categorical = TRUE, transform = NULL,
+  resolution = 1000, points=TRUE, rug=TRUE, style="raster")
+post_plot_1
+```
+```{r}
+post_plot_2 <- conditional_effects(model_Q2_rating, effects = "Mood_cont",
+  conditions = conditions, categorical = TRUE, transform = NULL,
+  resolution = 1000, points=TRUE, rug=TRUE, style="raster")
+post_plot_2
+```
+
+```{r}
+#saveRDS(model_Q1_rating, file = "model1_exp3.rds")
+#saveRDS(model_Q2_rating, file = "model2_exp3.rds")
+```
+
+```{r}
+model_Q1_rating <- readRDS(file = "model1_exp3.rds")
+model_Q2_rating <- readRDS(file = "model2_exp3.rds")
+```
