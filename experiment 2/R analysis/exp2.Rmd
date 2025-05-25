@@ -1,0 +1,152 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+library(readxl)
+library(brms)
+library(tidyverse)
+
+options(mc.cores = 4)
+set.seed(1794)
+```
+
+```{r}
+exp2_Q1 <- read_excel("exp2_Q1.xlsx")
+exp2_Q2 <- read_excel("exp2_Q2.xlsx")
+
+convert_vars <- function(df, ordinal_var, factor_vars) {
+  df[[ordinal_var]] <- factor(df[[ordinal_var]], ordered = TRUE)
+  df <- df %>%
+    mutate(across(all_of(factor_vars), as.factor))
+  return(df)
+}
+
+exp2_Q1 <- convert_vars(
+  exp2_Q1, 
+  ordinal_var = "Rating", 
+  factor_vars = c("Type", "NPI")
+)
+
+exp2_Q2 <- convert_vars(
+  exp2_Q2, 
+  ordinal_var = "Rating", 
+  factor_vars = c("Type", "NPI")
+)
+```
+
+```{r}
+exp2_Q1$Type_cont <- as.factor(exp2_Q1$Type)
+exp2_Q1$NPI_cont <- as.factor(exp2_Q1$NPI)
+
+exp2_Q2$Type_cont <- as.factor(exp2_Q2$Type)
+exp2_Q2$NPI_cont <- as.factor(exp2_Q2$NPI)
+
+contrasts(exp2_Q1$Type_cont) <- c(-.5,.5)
+contrasts(exp2_Q1$NPI_cont) <- c(-.5,.5)
+contrasts(exp2_Q2$Type_cont) <- c(-.5,.5)
+contrasts(exp2_Q2$NPI_cont) <- c(-.5,.5)
+```
+
+```{r}
+formula <- Rating ~ NPI_cont * Type_cont +
+  (1 + NPI_cont * Type_cont | Model) +
+  (1 + NPI_cont * Type_cont | Item)
+```
+
+```{r}
+priors_1 <- c(
+  set_prior("normal(0, 0.95)", class = "b"),
+  set_prior("exponential(1.25)", class = "sd", group = "Model"),
+  set_prior("exponential(1.19)", class = "sd", group = "Item")
+)
+
+priors_2 <- c(
+  set_prior("normal(0, 1.75)", class = "b"),
+  set_prior("exponential(0.67)", class = "sd", group = "Model"),
+  set_prior("exponential(0.66)", class = "sd", group = "Item")
+)
+```
+
+```{r}
+model_naturalness_rating <- brm(
+  formula = formula,
+  data = exp2_Q1,
+  family = cumulative("probit"),
+  chains = 4,
+  iter = 8000,
+  prior = priors_1,
+  seed = 1794,
+  control = list(adapt_delta = 0.99, max_treedepth = 12)
+)
+```
+
+```{r}
+model_naturalness_rating
+```
+
+```{r}
+post_model_naturalness <- as_draws_df(model_naturalness_rating, variable = NULL, regex = FALSE, inc_warmup = FALSE)
+
+mean(post_model_naturalness$'b_NPI_cont1' > 0)
+mean(post_model_naturalness$'b_Type_cont1' > 0)
+mean(post_model_naturalness$'b_NPI_cont1:Type_cont1' < 0)
+```
+1) Наличие NPI ухудшает оценки для всех предложений.
+2) Вне зависимости от наличия NPI bare conditionals в целом оцениваются хуже, чем premise conditionals.
+3) Эффект NPI не зависит от типа кондиционала.
+
+```{r}
+model_belief_rating <- brm(
+  formula = formula,
+  data = exp2_Q2,
+  family = cumulative("probit"),
+  chains = 4,
+  iter = 8000,
+  prior = priors_2,
+  seed = 1794,
+  control = list(adapt_delta = 0.99, max_treedepth = 12)
+)
+```
+
+```{r}
+model_belief_rating
+```
+
+```{r}
+post_model_belief <- as_draws_df(model_belief_rating, variable = NULL, regex = FALSE, inc_warmup = FALSE)
+
+mean(post_model_belief$'b_NPI_cont1' > 0)
+mean(post_model_belief$'b_Type_cont1' > 0)
+mean(post_model_belief$'b_NPI_cont1:Type_cont1' > 0)
+```
+1) Вера в premise сильнее в предложениях без NPI.
+2) Вера в premise сильнее в premise conditionals, чем в bare conditionals.
+3) Коэффициент взаимодействия предполагает, что при наличии NPI вера в premise ослабевает более значительно в bare conditionals, чем в premise conditionals.
+
+```{r}
+conditions <- data.frame(NPI_cont=c("none","all that"))
+post_plot_1<-conditional_effects(model_naturalness_rating, effects = "Type_cont",
+  conditions = conditions, categorical = TRUE, transform = NULL,
+  resolution = 1000, points=TRUE, rug=TRUE, style="raster")
+post_plot_1
+```
+
+```{r}
+conditions <- data.frame(NPI_cont=c("none","all that"))
+post_plot_2<-conditional_effects(model_belief_rating, effects = "Type_cont",
+  conditions = conditions, categorical = TRUE, transform = NULL,
+  resolution = 1000, points=TRUE, rug=TRUE, style="raster")
+post_plot_2
+```
+
+
+```{r}
+saveRDS(model_naturalness_rating, file = "model1_exp2.rds")
+#saveRDS(model_belief_rating, file = "model2_exp2.rds")
+```
