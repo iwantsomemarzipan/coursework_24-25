@@ -1,0 +1,280 @@
+---
+title: "Эксперимент 1"
+output: html_notebook
+---
+
+Код с анализом данных из оригинального эксперимента, на который я опиралась, можно найти [здесь](https://osf.io/6zah8/files/osfstorage).
+
+```{r}
+library(readxl)
+library(brms)
+library(tidyverse)
+
+options(mc.cores = 4)
+set.seed(1794)
+```
+
+Для порядкой регрессии нужно удостовериться, что модель будет считывать все переменные как категориальные.
+```{r}
+df_if_sentences <- read_excel("df_if_sentences.xlsx")
+df_if_quant_sentences <- read_excel("df_if_quant_sentences.xlsx")
+
+# преобразуем переменные в категориальные
+convert_vars <- function(df, ordinal_var, factor_vars) {
+  df[[ordinal_var]] <- factor(df[[ordinal_var]], ordered = TRUE)
+  df <- df %>%
+    mutate(across(all_of(factor_vars), as.factor))
+  return(df)
+}
+
+df_if_sentences <- convert_vars(
+  df_if_sentences, 
+  ordinal_var = "Rating", 
+  factor_vars = c("NPI", "Mood")
+)
+
+df_if_quant_sentences <- convert_vars(
+  df_if_quant_sentences, 
+  ordinal_var = "Rating", 
+  factor_vars = c("NPI", "Structure")
+)
+```
+
+```{r}
+df_if_sentences$NPI <- relevel(df_if_sentences$NPI, ref = "yes")
+df_if_quant_sentences$NPI <- relevel(df_if_quant_sentences$NPI, ref = "yes")
+df_if_quant_sentences$Structure <- relevel(df_if_quant_sentences$Structure, ref = "Universal Q")
+```
+
+```{r}
+df_if_sentences$NPI_cont <- as.factor(df_if_sentences$NPI)
+df_if_sentences$Mood_cont <- as.factor(df_if_sentences$Mood)
+df_if_sentences$Structure_cont <- as.factor(df_if_sentences$Structure)
+
+df_if_quant_sentences$NPI_cont <- as.factor(df_if_quant_sentences$NPI)
+df_if_quant_sentences$Mood_cont <- as.factor(df_if_quant_sentences$Mood)
+df_if_quant_sentences$Structure_cont <- as.factor(df_if_quant_sentences$Structure)
+
+contrasts(df_if_sentences$NPI_cont) <- c(-.5,.5)
+contrasts(df_if_sentences$Mood_cont) <- c(-.5,.5)
+contrasts(df_if_quant_sentences$NPI_cont) <- c(-.5,.5)
+contrasts(df_if_quant_sentences$Structure_cont) <- c(-.5,.5)
+```
+
+Формулы для 4 моделей
+```{r}
+# с контрастами
+if_formula_cont <- Rating ~ NPI_cont * Mood_cont +
+  (1 + NPI_cont * Mood_cont | Model) +
+  (1 + NPI_cont * Mood_cont | Item)
+
+if_formula_dum <- Rating ~ NPI * Mood +
+  (1 + NPI * Mood | Model) +
+  (1 + NPI * Mood | Item)
+
+# с контрастами
+quant_formula_cont <- Rating ~ NPI_cont * Structure_cont +
+  (1 + NPI_cont * Structure_cont | Model) +
+  (1 + NPI_cont * Structure_cont | Item)
+
+quant_formula_dum <- Rating ~ NPI * Structure +
+  (1 + NPI * Structure | Model) +
+  (1 + NPI * Structure | Item)
+```
+
+```{r}
+priors <- c(
+  set_prior("normal(0, 0.9)", class = "b"),  # для коэф. регрессии
+  set_prior("exponential(0.68)", class = "sd", group = "Model"),  # случайный эффект моделей
+  set_prior("exponential(0.61)", class = "sd", group = "Item")  # случайный эффект айтемов
+)
+```
+
+```{r}
+# модель 1 для датасета, где мы противопоставляем
+# индикативные кондиционалы с контрафктическими и учитываем контрасты
+model_NPI_if <- brm(
+  formula = if_formula_cont,
+  data = df_if_sentences,
+  family = cumulative("probit"),
+  chains = 4,
+  iter = 8000,
+  prior = priors,
+  seed = 1794,
+  control = list(adapt_delta = 0.99, max_treedepth = 12)
+)
+```
+
+```{r}
+summary(model_NPI_if)
+```
+
+```{r}
+post_model.1 <- posterior_samples(model_NPI_if)
+```
+
+При n > 0, мы смотрим, насколько вероятно, что коэффициент будет положительным, и наоборот.
+```{r}
+mean(post_model.1$'b_NPI_cont1' > 0)
+mean(post_model.1$'b_Mood_cont1' > 0)
+mean(post_model.1$'b_NPI_cont1:Mood_cont1' < 0)
+```
+b_NPI_cont1 статистически значим => наличие NPI ухудшает оценку всех предложений.
+Mood_cont1 не имеет статистической значимости (индикативы и контрфактивы вне зависимости от наличия NPI оцениваются одинаково).
+NPI_cont1:Mood_cont1 --- эффект наличия NPI влияет больше на идикативы, чем на контрфактивы. Однако стоит отметить, что этот эффект не особо устойчив.
+
+```{r}
+# модель 2 для того же датасета, что и в 1,
+# только без контрастов
+model_NPI_if_dum <- brm(
+  formula = if_formula_dum,
+  data = df_if_sentences,
+  family = cumulative("probit"),
+  chains = 4,
+  iter = 8000,
+  prior = priors,
+  seed = 1794,
+  control = list(adapt_delta = 0.99, max_treedepth = 12)
+)
+```
+
+```{r}
+summary(model_NPI_if_dum)
+```
+
+```{r}
+post_model.2 <- posterior_samples(model_NPI_if_dum)
+```
+
+```{r}
+mean(post_model.2$'b_NPIno' > 0)
+mean(post_model.2$'b_MoodSubjunctive' > 0)
+mean(post_model.2$'b_NPIno:MoodSubjunctive' < 0)
+```
+NPIno => Индикативные предложения с NPI оцениваются хуже, чем те, что без NPI.
+MoodSubjunctive => эффект незначим (при наличии NPI индикативы и контрфактивы оценивацются одинаково).
+NPIno:MoodSubjunctive => эффект незначим (наличие или отсутствие NPI не влияет на разницу в оценках между индикативами и контрфактивами).
+
+```{r}
+hypotheses_if<-c(
+  # существует ли разница между индикативными и контрафакт. предложениями без NPI
+  "IND.vs.SUBJV.withoutNPI" = "MoodSubjunctive+NPIno:MoodSubjunctive*1=0",
+  
+  # существует ли разница между предложениями в сослагательном наклонении с NPI и без
+  "NPI.vs.noNPI.inSUBJUNCTIVES" = "NPIno+NPIno:MoodSubjunctive*1=0"
+)
+
+hyp_post<-hypothesis(model_NPI_if_dum, hypotheses_if)
+hyp_post
+```
+Без NPI нет разницы между индикативными и контрфактивными кондиционалами. Контрфактивы без NPI оцениваются лучше, чем с NPI, но эффект на грани значимости.
+
+Графики апостериорных распределений
+```{r}
+conditions <- data.frame(NPI=c("no", "yes"))
+post_plot<-conditional_effects(model_NPI_if_dum, effects = "Mood",
+  conditions = conditions, categorical = TRUE, transform = NULL,
+  resolution = 1000, points=TRUE, rug=TRUE, style="raster")
+post_plot
+```
+
+```{r}
+# модель 3 для датасета, где мы противопоставляем индикативные предложения
+# с квантором всеобщности и без с учётом контрастов
+model_NPI_quant <- brm(
+  formula = quant_formula_cont,
+  data = df_if_quant_sentences,
+  family = cumulative("probit"),
+  chains = 4,
+  iter = 8000,
+  prior = priors,
+  seed = 1794,
+  control = list(adapt_delta = 0.99, max_treedepth = 12)
+)
+```
+
+```{r}
+summary(model_NPI_quant)
+```
+
+```{r}
+post_model.3 <- posterior_samples(model_NPI_quant)
+```
+
+```{r}
+mean(post_model.3$'b_NPI_cont1' > 0)
+mean(post_model.3$'b_Structure_cont1' > 0)
+mean(post_model.3$'b_NPI_cont1:Structure_cont1' > 0)
+```
+NPI_cont1 => наличие NPI ухудшает оценки для всех предложений.
+Structure_cont1 => нет разницы в оценках между предложениями с и без квантора всеобщности.
+NPI_cont1:Structure_cont1 => нет доказательства, что эффект NPI отличается для предложений с и без квантора всеобщности.
+
+```{r}
+# модель 4 для того же датасета, что и в 3,
+# только без контрастов
+model_NPI_quant_dum <- brm(
+  formula = quant_formula_dum,
+  data = df_if_quant_sentences,
+  family = cumulative("probit"),
+  chains = 4,
+  iter = 8000,
+  prior = priors,
+  seed = 1794,
+  control = list(adapt_delta = 0.99, max_treedepth = 12)
+)
+```
+
+```{r}
+summary(model_NPI_quant_dum)
+```
+
+```{r}
+post_model.4 <- posterior_samples(model_NPI_quant_dum)
+```
+
+
+```{r}
+mean(post_model.4$'b_NPIno' > 0)
+mean(post_model.4$'b_StructureConditional' < 0)
+mean(post_model.4$'b_NPIno:StructureConditional' > 0)
+```
+NPIno => предложения с квантором оцениваются лучше при отсутствии NPI.
+StructureConditional => нет разницы в оценках между кондиционалами и предложениями с кванторами при наличии NPI.
+NPI_cont1:Structure_cont1 => нет доказательства, что эффект NPI отличается для предложений с и без квантора всеобщности.
+
+```{r}
+hypothesis_quant <- c(
+  # существует ли разница между предложениями с/без квант. при отсутствии NPI 
+  "COND.vs.QUANT.withoutNPI" = "StructureConditional+NPIno:StructureConditional*1=0",
+  # существует ли разница между предложениями без квант. с NPI и без
+  "NPI.vs.noNPI.inCONDITIONAL" = "NPIno+NPIno:StructureConditional*1=0"
+)
+
+hyp_post2 <- hypothesis(model_NPI_quant_dum, hypothesis_quant)
+hyp_post2
+```
+При отсутствии NPI предложения с/без квантора оцениваются одинаково. С NPI обычные кондиционалы оцениваются хуже, чем предложения с квантором (1.86 vs 1.53).
+
+График апостериорного рапсределения
+```{r}
+conditions <- data.frame(NPI=c("no", "yes"))
+post_plot2 <- conditional_effects(model_NPI_quant_dum, effects = "Structure",
+  conditions = conditions, categorical = TRUE, transform = NULL,
+  resolution = 1000, points=TRUE, rug=TRUE, style="raster")
+post_plot2
+```
+
+```{r}
+saveRDS(model_NPI_if, file = "model_NPI_if.rds")
+saveRDS(model_NPI_if_dum, file = "model_NPI_if_dum.rds")
+saveRDS(model_NPI_quant, file = "model_NPI_quant.rds")
+saveRDS(model_NPI_quant_dum, file = "model_NPI_quant_dum.rds")
+```
+
+```{r}
+model_NPI_if <- readRDS(file = "model_NPI_if.rds")
+model_NPI_if_dum <- readRDS(file = "model_NPI_if_dum.rds")
+model_NPI_quant <- readRDS(file = "model_NPI_quant.rds")
+model_NPI_quant_dum <- readRDS(file = "model_NPI_quant_dum.rds")
+```
